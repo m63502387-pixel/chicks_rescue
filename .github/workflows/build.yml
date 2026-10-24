@@ -89,5 +89,22 @@ jobs:
         run: |
           mkdir -p build
           "$GODOT" --headless --path "$PROJECT_DIR" --import
-          "$GODOT" --headless --path "$PROJECT_DIR" --export-debug "$PRESET" "$GITHUB_WORKSPACE/build/chicks_rescue.apk"
-          test -s build/chicks_resc
+          set +e
+          "$GODOT" --headless --path "$PROJECT_DIR" --export-debug "$PRESET" "$GITHUB_WORKSPACE/build/chicks_rescue.apk" 2>&1 | tee build/export.log
+          echo "=== Godot exit code: ${PIPESTATUS[0]} ==="
+          set -e
+          echo "=== Errors from log ==="
+          grep -E "ERROR" build/export.log || true
+          test -s build/chicks_rescue.apk
+          unzip -tq build/chicks_rescue.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chicks_rescue-apk
+          path: build/chicks_rescue.apk
+
+      - name: Attach APK to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/chicks_rescue.apk
