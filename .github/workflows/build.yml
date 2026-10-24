@@ -1,0 +1,93 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: "4.7.2"
+  PRESET: "Android Debug"
+  BUILD_TOOLS: "36.1.0"
+  ANDROID_API: "36"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Находит project.godot, даже если проект лежит в подпапке
+      - name: Find project
+        run: |
+          P=$(dirname "$(find . -name project.godot -not -path '*/.godot/*' | head -n1)")
+          echo "PROJECT_DIR=$P" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools build-tools;${{ env.BUILD_TOOLS }} platforms;android-${{ env.ANDROID_API }}"
+
+      - name: Cache Godot
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-android
+
+      - name: Install Godot and Android templates
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          BASE=https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable
+          mkdir -p ~/godot-bin
+          curl -fsSL -o /tmp/godot.zip "$BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d ~/godot-bin
+          curl -fsSL -o /tmp/tpl.tpz "$BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          T=~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          mkdir -p "$T"
+          unzip -q -j /tmp/tpl.tpz 'templates/android*' templates/version.txt -d "$T"
+
+      - name: Configure Godot for Android
+        run: |
+          G=$HOME/godot-bin/Godot_v${GODOT_VERSION}-stable_linux.x86_64
+          chmod +x "$G"
+          echo "GODOT=$G" >> "$GITHUB_ENV"
+
+          KS=$HOME/debug.keystore
+          keytool -genkeypair -v -keystore "$KS" -storepass android \
+            -alias androiddebugkey -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$KS" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+
+          mkdir -p ~/.config/godot
+          cat > ~/.config/godot/editor_settings-${GODOT_VERSION%.*}.tres <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$KS"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+
+      - name: Import and export APK
+        run: |
+          mkdir -p build
+          "$GODOT" --headless --path "$PROJECT_DIR" --import
+          "$GODOT" --headless --path "$PROJECT_DIR" --export-debug "$PRESET" "$GITHUB_WORKSPACE/build/chicks_rescue.apk"
+          test -s build/chicks_resc
